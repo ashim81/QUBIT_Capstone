@@ -1,0 +1,38 @@
+#jupyter notebook info
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+#python stuff
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+#virtual env
+.venv/
+venv/
+env/
+
+#env vars and credentials
+.env
+.env.*
+*.pem
+*.key
+*token*
+qiskit-ibm.json
+
+#IDE
+.vscode/
+.idea/
+
+#OS
+.DS_Store
+Thumbs.db
+
+#Doxygen formatting
+docs/html/
+docs/latex/
+
+#temp files
+*.log
+*.tmp
