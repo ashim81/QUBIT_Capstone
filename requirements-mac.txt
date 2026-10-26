@@ -1,0 +1,9 @@
+# Project dependencies verified in the local macOS Python 3.12 environment.
+# Install with: python -m pip install -r requirements-mac.txt
+qiskit==2.5.2
+qiskit-aer==0.17.2
+qiskit-ibm-runtime==0.49.0
+numpy==2.5.2
+python-dotenv==1.2.4
+ipykernel==7.4.0
+nbformat==5.11.1
