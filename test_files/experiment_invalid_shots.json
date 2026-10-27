@@ -1,0 +1,5 @@
+{
+    "backend": "aer_simulator",
+    "shots": -100,
+    "accuracy": 0.9
+}
