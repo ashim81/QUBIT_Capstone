@@ -1,0 +1,23 @@
+exp := exp '+' mulexp | exp '-' mulexp | mulexp;
+
+mulexp := mulexp '*' ID | mulexp '/' ID | ID;
+
+ID := State | Call | Numconst | '(' exp ')';
+
+State := '|' compstate '>';
+
+compstate := 0 compstate | 1 compstate | 0 | 1;
+
+call := funcName '(' args ')';
+
+funcName := [a-zA-Z]([a-zA-Z]|[0-9])+;
+
+args := argList | ;
+
+argList := argList ',' exp | exp;
+
+Numconst := real | img;
+
+real = ([0-9])+;
+
+img = ([0-9])+ 'i'; 
