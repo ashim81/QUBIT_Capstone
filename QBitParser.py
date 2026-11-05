@@ -1,13 +1,14 @@
 """
     Scanner and Parser for the grammar in grammarQBits.txt
- 
+    Takes in a
+    
     Token classes
     -------------
-    STATE     '|' [0|1] '>'                  e.g. |0110>
-    FUNCNAME  [a-zA-Z]([a-zA-Z]|[0-9])+     (at least 2 characters, per the grammar)
-    IMG       [0-9]+ 'i'                     e.g. 3i
+    STATE     '|' [0-9+-] '>'                  e.g. |0>
+    FUNCNAME  [a-zA-Z]([a-zA-Z]|[0-9])*     (at least 1 character)
+    IMG       [0-9]* 'i'                     e.g. 3i, i
     REAL      [0-9]+                         e.g. 42
-    PLUS '+'  MINUS '-'  STAR '*'  SLASH '/'
+    PLUS '+'  MINUS '-'  STAR '*'  SLASH '/' EXP ** EXP ^
     LPAREN '('  RPAREN ')'  COMMA ','
 
 """
@@ -196,12 +197,13 @@ class SemanticError(Exception):
         super().__init__("\n".join(errors))
 
 TOKEN_REGEX = [
-    ("STATE", r"\|[01]>"),
-    ("IMG", r"[0-9]*i"),
-    ("FUNCNAME", r"[a-zA-z][a-zA-Z0-9]*"),
-    ("REAL", r"[0-9]+"),
+    ("STATE", r"\|[0-9+-]>"),
+    ("IMG", r"(([0-9]+\.[0-9]+)?|[0-9]*)i"),
+    ("FUNCNAME", r"[a-zA-Z][a-zA-Z0-9]*"),
+    ("REAL", r"[0-9]+\.[0-9]+|[0-9]+"),
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
+    ("EXP", r"\*\*|\^"),
     ("MUL", r"\*"),
     ("DIV", r"/"),
     ("OPENPAREN", r"\("),
@@ -261,7 +263,7 @@ def tokenize(text):
     @details Contains several node helper functions and a parse function that analysis a given input
 
     @author Wyatt Fischer
-    @version 1.0.0
+    @version 1.1.0
     @date 2026-10-30
 """
 class Parser:
@@ -319,12 +321,17 @@ class Parser:
         @returns A list of complex values
     """
     def parse(self):
+        if self.tokens == []:
+            return None
+        
         node = self.exp()
+        #If more tokens left, error
         if self.peek() is not None:
             self.error("end of input")
 
+        #Check Semantics
         SemanticAnalyzer().analyze(node)
-        return self.evaluate(node)
+        return self._evaluate(node)
     """
         @brief Represents the exp productions
         @returns The exp node
@@ -341,12 +348,21 @@ class Parser:
         @returns The mulexp node
     """
     def mulexp(self) -> Node:
-        node = self.id()
+        node = self.exexp()
         while self.peek_type() in ("MUL", "DIV"):
             op = self.advance()
-            node = Op(op.linenum, op.col, op.svalue, node, self.id())
+            node = Op(op.linenum, op.col, op.svalue, node, self.exexp())
         return node
-
+    """
+        @brief Represents the exexp productions
+        @returns The exexp node
+    """
+    def exexp(self) -> Node:
+        node = self.id()
+        while self.peek_type() == "EXP":
+            op = self.advance()
+            node = Op(op.linenum, op.col, op.svalue, node, self.exexp())
+        return node
     """
         @brief Represents the id productions
         @returns The id node
@@ -358,11 +374,11 @@ class Parser:
         if tok.type == "FUNCNAME":
             return self.call()
         if tok.type == "REAL":
-            return Num(tok.linenum, tok.col, "real", int(tok.svalue))
+            return Num(tok.linenum, tok.col, "real", float(tok.svalue))
         if tok.type == "IMG":
             if len(tok.svalue) == 1: #if imganiary is i
                 return Num(tok.linenum, tok.col, "img", 1) 
-            return Num(tok.linenum, tok.col, "img", int(tok.svalue[:-1])) #remove i
+            return Num(tok.linenum, tok.col, "img", float(tok.svalue[:-1])) #remove i
         if tok.type == "OPENPAREN":
             node = self.exp()
             self.expect("CLOSEPAREN")
@@ -404,17 +420,24 @@ class Parser:
         @brief Evaluates a AST to determine the state coefficients
         @returns a vector of complex values representing the state coefficients
     """
-    def evaluate(self, node):
+    def _evaluate(self, node):
         if isinstance(node, State):
             vec = np.zeros(2, dtype = complex)
-            vec[int(node.s_bits)] = 1 #Create [0, 1] or [1, 0] respectively
+            if node.s_bits == '+':
+                vec[0] = 1 / 2 ** (0.5)
+                vec[1] = 1 / 2 ** (0.5)
+            elif node.s_bits == '-':
+                vec[0] = 1 / 2 ** (0.5)
+                vec[1] = -1 / 2 ** (0.5)
+            else:
+                vec[int(node.s_bits)] = 1 #Create [0, 1] or [1, 0] respectively
             return vec
         
         if isinstance(node, Num):
             return complex(0, node.value) if node.kind == "img" else complex(node.value)
         
         if isinstance(node, Op):
-            left, right = evaluate(node.left), evaluate(node.right)
+            left, right = self._evaluate(node.left), self._evaluate(node.right)
 
             if node.op in ('+', '-'):
                 return left + right if node.op == '+' else left - right
@@ -422,6 +445,9 @@ class Parser:
             if node.op == '*':
                 return left * right
 
+            if node.op in ('**', '^'):
+                return left ** right
+            
             if right == 0:
                 raise EvalError("division by zero")
             return left / right
@@ -436,7 +462,7 @@ class Parser:
     @details Recursivly calls on the parts of the AST and raises all resulting errors
 
     @author Wyatt Fischer
-    @version 1.0.0
+    @version 1.1.0
     @date 2026-10-30
 """
 class SemanticAnalyzer:
@@ -455,7 +481,7 @@ class SemanticAnalyzer:
 
     """
         @brief a recursive semantic analysis of a AST that checks the AST for errors
-        @returns True if the node is a statevector, and False if the node is a scalar
+        @returns True if the node is a statevector, False if the node is a scalar, and None if there is an error
     """
     def _semantic(self, head : Node):
         if isinstance(head, Op):
@@ -475,12 +501,23 @@ class SemanticAnalyzer:
                     self.errors.append(f"Operands of '{head.op}' at line {head.line}, col {head.col} cannot both be statevectors.")
                     return None
                 return c1_vector or c2_vector
+            elif (head.op in ('**', '^')):
+                if c1_vector or c2_vector:
+                    self.errors.append(f"Operands of '{head.op}' at line {head.line}, col {head.col} cannot be statevectors.")
+                    return None
+                return c1_vector
             else: #/
                 if c2_vector:
                     self.errors.append(f"Right Operand of '{head.op}' at line {head.line}, col {head.col} cannot be a statevector.")
                     return None
                 return c1_vector
+            
         elif isinstance(head, State):
+            if head.s_bits in ('+', '-'):
+                return True
+            
+            if any(not bit in ('0', '1') for bit in head.s_bits):
+                self.errors.append(f"State |{head.s_bits}> is not a valid computational state.")
             return True
         elif isinstance(head, Num):
             return False
@@ -489,3 +526,5 @@ class SemanticAnalyzer:
             if any(arg is None for arg in processed_args):
                     return None
             return all(processed_args)
+
+print(Parser("|+>").parse())

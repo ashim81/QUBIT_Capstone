@@ -1,6 +1,8 @@
 exp := exp '+' mulexp | exp '-' mulexp | mulexp;
 
-mulexp := mulexp '*' ID | mulexp '/' ID | ID;
+mulexp := mulexp '*' exexp | mulexp '/' exexp | exexp;
+
+exexp := ID ** exexp | ID ^ exexp | ID;
 
 ID := State | Call | Numconst | '(' exp ')';
 
@@ -10,7 +12,7 @@ compstate := 0 compstate | 1 compstate | 0 | 1;
 
 call := funcName '(' args ')';
 
-funcName := [a-zA-Z]([a-zA-Z]|[0-9])+;
+funcName := [a-zA-Z]([a-zA-Z]|[0-9])*;
 
 args := argList | ;
 
