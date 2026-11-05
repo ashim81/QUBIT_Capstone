@@ -1,0 +1,5 @@
+{
+    "qbitcount": 1,
+    "initial states": "|0>",
+    "expected output": "1"
+}
