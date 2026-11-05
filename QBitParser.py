@@ -526,5 +526,3 @@ class SemanticAnalyzer:
             if any(arg is None for arg in processed_args):
                     return None
             return all(processed_args)
-
-print(Parser("|+>").parse())
