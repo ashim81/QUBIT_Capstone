@@ -13,6 +13,8 @@
 """
 
 import re
+import numpy as np
+from math import isclose
 
 """
     @class Token
@@ -28,11 +30,13 @@ class Token:
     type: str
     svalue: str
     linenum : int
+    col : int
 
-    def __init__(self, type, svalue, linenum):
+    def __init__(self, type, svalue, linenum, col):
         self.type = type
         self.svalue = svalue
         self.linenum = linenum
+        self.col = col
 
     """
         @brief Creates a string representation of the token
@@ -53,6 +57,11 @@ class Token:
     @date 2026-10-30
 """
 class Node:
+    line: int
+    col: int
+    def __init__(self, line, col):
+        self.line = line
+        self.col = col
     def printNode(self, indent = 0):
         raise NotImplementedError
 
@@ -71,7 +80,8 @@ class Op(Node):
     left: Node
     right: Node
 
-    def __init__(self, op, left, right):
+    def __init__(self, line, col, op, left, right):
+        super().__init__(line, col)
         self.op = op
         self.left = left
         self.right = right
@@ -89,7 +99,7 @@ class Op(Node):
 
 """
     @class State
-    @brief Represents a basis state vector
+    @brief Subcase of Node Represents a basis state vector
 
     @details This class contains the string of bits representing the basis vector and a print function 
 
@@ -100,7 +110,8 @@ class Op(Node):
 class State(Node):
     s_bits: str # 0, 1
 
-    def __init__(self, s_bits):
+    def __init__(self, line, col, s_bits):
+        super().__init__(line, col)
         self.s_bits = s_bits
 
     """
@@ -127,7 +138,8 @@ class Num(Node):
     kind: str # real or img
     value: int
 
-    def __init__(self, kind, value):
+    def __init__(self, line, col, kind, value):
+        super().__init__(line, col)
         self.kind = kind
         self.value = value
 
@@ -153,9 +165,10 @@ class Num(Node):
 """
 class Call(Node):
     name: str
-    args: List[Node]
+    args: list[Node]
 
-    def __init__(self, name, args):
+    def __init__(self, line, col, name, args):
+        super().__init__(line, col)
         self.name = name
         self.args = args
 
@@ -177,8 +190,13 @@ class ScannerError(Exception):
 class ParseError(Exception):
     pass
 
+class SemanticError(Exception):
+    def __init__(self, errors):
+        self.erros = errors
+        super().__init__("\n".join(errors))
+
 TOKEN_REGEX = [
-    ("STATE", r"\|[0|1]>"),
+    ("STATE", r"\|[01]>"),
     ("IMG", r"[0-9]*i"),
     ("FUNCNAME", r"[a-zA-z][a-zA-Z0-9]*"),
     ("REAL", r"[0-9]+"),
@@ -220,10 +238,10 @@ def scan(text):
         token = _MASTER.match(text, pos)
         if not token:
             raise ScannerError(
-                f"Illegal cahracter {text[pos]} at line: {line}"
+                f"Illegal character {text[pos]} at line: {line}, col: {pos + 1}"
             )
         #yield created token
-        yield Token(token.lastgroup, token.group(), line)
+        yield Token(token.lastgroup, token.group(), line, pos)
         pos = token.end()
 
 """
@@ -247,10 +265,13 @@ def tokenize(text):
     @date 2026-10-30
 """
 class Parser:
-    def __init__(self, tokens: List[Token]):
+    def __init__(self, tokens: list[Token]):
         self.tokens = tokens
         self.index = 0
 
+    def __init__(self, text: str):
+        self.tokens = tokenize(text)
+        self.index = 0
     """
         @brief Looks at the top of the token list and returns the top token
         @returns A Token
@@ -291,18 +312,19 @@ class Parser:
         tok = self.peek()
         if tok is None:
             raise ParseError(f"Unexpected end of input, expected {expected}")
-        raise ParseError(f"Unexpected {tok.type} {tok.svalue} at line {tok.linenum}, expected {expected}")
+        raise ParseError(f"Unexpected {tok.type} {tok.svalue} at line {tok.linenum}, col {tok.col}, expected {expected}")
 
     """
         @brief Parses the list of tokens
-        @returns The head of the AST
+        @returns A list of complex values
     """
-    def parse(self) -> Node:
+    def parse(self):
         node = self.exp()
         if self.peek() is not None:
             self.error("end of input")
-        return node
 
+        SemanticAnalyzer().analyze(node)
+        return self.evaluate(node)
     """
         @brief Represents the exp productions
         @returns The exp node
@@ -310,8 +332,8 @@ class Parser:
     def exp(self) -> Node:
         node = self.mulexp()
         while self.peek_type() in ("PLUS", "MINUS"):
-            op = self.advance().svalue
-            node = Op(op, node, self.mulexp())
+            op = self.advance()
+            node = Op(op.linenum, op.col, op.svalue, node, self.mulexp())
         return node
 
     """
@@ -321,8 +343,8 @@ class Parser:
     def mulexp(self) -> Node:
         node = self.id()
         while self.peek_type() in ("MUL", "DIV"):
-            op = self.advance().svalue
-            node = Op(op, node, self.id())
+            op = self.advance()
+            node = Op(op.linenum, op.col, op.svalue, node, self.id())
         return node
 
     """
@@ -330,23 +352,20 @@ class Parser:
         @returns The id node
     """
     def id(self) -> Node:
-        t = self.peek_type()
-        if t == "STATE":
-            svalue = self.advance().svalue
-            return State(svalue[1:-1]) #remove |, >
-        if t == "FUNCNAME":
+        tok = self.advance() 
+        if tok.type == "STATE":
+            return State(tok.linenum, tok.col, tok.svalue[1:-1]) #remove |, >
+        if tok.type == "FUNCNAME":
             return self.call()
-        if t == "REAL":
-            return Num("real", int(self.advance().svalue))
-        if t == "IMG":
-            svalue = self.advance().svalue
-            if len(svalue) == 1: #if imganiary is i
-                return Num("img", 1) 
-            return Num("img", int(svalue[:-1])) #remove i
-        if t == "LPAREN":
-            self.advance()
+        if tok.type == "REAL":
+            return Num(tok.linenum, tok.col, "real", int(tok.svalue))
+        if tok.type == "IMG":
+            if len(tok.svalue) == 1: #if imganiary is i
+                return Num(tok.linenum, tok.col, "img", 1) 
+            return Num(tok.linenum, tok.col, "img", int(tok.svalue[:-1])) #remove i
+        if tok.type == "OPENPAREN":
             node = self.exp()
-            self.expect("RPAREN")
+            self.expect("CLOSEPAREN")
             return node
         self.error("STATE, FUNCNAME, REAL, IMG, or '('")
 
@@ -365,7 +384,7 @@ class Parser:
         @brief Creates the list of nodes, including an empty list
         @returns A list of Nodes
     """
-    def args(self) -> List[Node]:
+    def args(self) -> list[Node]:
         if self.peek_type() == "RPAREN":
             return []
         return self.arg_list()
@@ -374,9 +393,99 @@ class Parser:
         @brief Creates the list of nodes that represent the argument list
         @returns A List of exp Nodes
     """
-    def arg_list(self) -> List[Node]:
+    def arg_list(self) -> list[Node]:
         result = [self.exp()]
         while self.peek_type() == "COMMA":
             self.advance
             result.append(self.exp())
         return result
+
+    """
+        @brief Evaluates a AST to determine the state coefficients
+        @returns a vector of complex values representing the state coefficients
+    """
+    def evaluate(self, node):
+        if isinstance(node, State):
+            vec = np.zeros(2, dtype = complex)
+            vec[int(node.s_bits)] = 1 #Create [0, 1] or [1, 0] respectively
+            return vec
+        
+        if isinstance(node, Num):
+            return complex(0, node.value) if node.kind == "img" else complex(node.value)
+        
+        if isinstance(node, Op):
+            left, right = evaluate(node.left), evaluate(node.right)
+
+            if node.op in ('+', '-'):
+                return left + right if node.op == '+' else left - right
+
+            if node.op == '*':
+                return left * right
+
+            if right == 0:
+                raise EvalError("division by zero")
+            return left / right
+
+        #TODO Gate Calls Later
+
+
+"""
+    @class SemanticAnalyzer
+    @brief A semantic analyzer that checks the given AST is able to be processed into a valid Qbit
+
+    @details Recursivly calls on the parts of the AST and raises all resulting errors
+
+    @author Wyatt Fischer
+    @version 1.0.0
+    @date 2026-10-30
+"""
+class SemanticAnalyzer:
+    def __init__(self):
+        self.errors = []
+
+    """
+        @brief Analyzes a AST for semantic errors, prints all it finds
+    """
+    def analyze(self, head: Node):
+        if not self._semantic(head):
+            self.errors.append(f"Final Value is not a Valid Statevector.")
+
+        if self.errors:
+            raise SemanticError(self.errors)
+
+    """
+        @brief a recursive semantic analysis of a AST that checks the AST for errors
+        @returns True if the node is a statevector, and False if the node is a scalar
+    """
+    def _semantic(self, head : Node):
+        if isinstance(head, Op):
+            c1_vector = self._semantic(head.left)
+            c2_vector = self._semantic(head.right)
+
+            if (c1_vector is None or c2_vector is None):
+                return None
+            
+            if (head.op in ('+', '-')):
+                if c1_vector != c2_vector:
+                    self.errors.append(f"Operands of '{head.op}' at line {head.line}, col {head.col} must both be scalars or both be statevectors.")
+                    return None
+                return c1_vector
+            elif (head.op == '*'):
+                if c1_vector and c2_vector:
+                    self.errors.append(f"Operands of '{head.op}' at line {head.line}, col {head.col} cannot both be statevectors.")
+                    return None
+                return c1_vector or c2_vector
+            else: #/
+                if c2_vector:
+                    self.errors.append(f"Right Operand of '{head.op}' at line {head.line}, col {head.col} cannot be a statevector.")
+                    return None
+                return c1_vector
+        elif isinstance(head, State):
+            return True
+        elif isinstance(head, Num):
+            return False
+        else: #Call
+            processed_args = [self._semantic(arg) for arg in head.args] 
+            if any(arg is None for arg in processed_args):
+                    return None
+            return all(processed_args)
