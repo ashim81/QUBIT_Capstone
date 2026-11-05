@@ -1,0 +1,8 @@
+{
+    "qbitcount": 2,
+    "initial states": [
+        "|0>",
+        "|0>"
+    ],
+    "expected output": "00"
+}
